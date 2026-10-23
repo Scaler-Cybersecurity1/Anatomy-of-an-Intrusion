@@ -112,7 +112,9 @@ details.tip { font-size: 13px; } details.tip summary { cursor: pointer; color: v
 .btn { border: 1px solid transparent; border-radius: var(--radius); padding: 10px 16px; cursor: pointer; font-weight: 600; font-size: 14px; background: var(--accent); color: var(--accent-ink); }
 .btn:hover { filter: brightness(1.07); } .btn:disabled { opacity: .45; cursor: not-allowed; filter: none; }
 .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); } .btn.ghost:hover { border-color: var(--muted); filter: none; }
-.note { font-size: 13px; color: var(--muted); margin: 0; max-width: 72ch; } .note.bad { color: var(--bad); } .note.good { color: var(--good); }
+.note { font-size: 13px; color: var(--muted); margin: 0; max-width: 72ch; } .note.feedback:empty { display: none; } .note.feedback { margin: 12px 0 4px; padding: 10px 14px; border-left: 4px solid currentColor; border-radius: var(--radius); background: color-mix(in srgb, currentColor 8%, transparent); }
+.note.flash { animation: flash .5s; } @keyframes flash { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+.note.bad { color: var(--bad); } .note.good { color: var(--good); }
 
 .flagbox { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 16px 18px; border: 2px dashed var(--accent); border-radius: var(--radius); background: var(--accent-soft); }
 .flagbox code { font: 500 clamp(15px,2.6vw,21px)/1.3 var(--font-mono); overflow-wrap: anywhere; min-width: 0; }
@@ -275,6 +277,7 @@ function renderMap(w) {
   const tb = el("div", "toolbar"); tb.innerHTML = `<span class="count" id="mapCount"></span>`;
   const sub = el("button", "btn", "Check mapping"); sub.id = "submitMap"; tb.appendChild(sub);
   board.appendChild(tb);
+  const mapNote = el("p", "note feedback", ""); mapNote.id = "mapNote"; mapNote.setAttribute("role", "alert"); board.appendChild(mapNote);
   const cards = el("div", "cards");
   ARTIFACTS.forEach(a => {
     const card = el("div", "card"); card.id = "card-" + a.id;
@@ -284,13 +287,12 @@ function renderMap(w) {
     const sel = document.createElement("select");
     TACTICS.forEach(([v, lab]) => { const o = document.createElement("option"); o.value = v; o.textContent = lab; if (v === state.map[a.id]) o.selected = true; sel.appendChild(o); });
     if (state.map[a.id]) sel.classList.add("done");
-    sel.addEventListener("change", () => { state.map[a.id] = sel.value; sel.classList.toggle("done", !!sel.value); save(); updateMapCount(); });
+    sel.addEventListener("change", () => { state.map[a.id] = sel.value; sel.classList.toggle("done", !!sel.value); save(); updateMapCount(); const n = $("#mapNote"); if (n) { n.textContent = ""; n.className = "note feedback"; } });
     row.appendChild(sel);
     card.appendChild(row);
     cards.appendChild(card);
   });
   board.appendChild(cards);
-  board.appendChild(el("p", "note", "")).id = "mapNote";
   w.appendChild(board);
   updateMapCount();
   sub.addEventListener("click", submitMap);
@@ -300,10 +302,16 @@ function updateMapCount() {
   const c = $("#mapCount"); if (c) c.innerHTML = `<b>${done}</b> / ${ARTIFACTS.length} mapped`;
   const b = $("#submitMap"); if (b) b.disabled = done < ARTIFACTS.length;
 }
+function showFeedback(note, msg) {
+  note.className = "note feedback bad"; note.textContent = msg;
+  note.classList.remove("flash"); void note.offsetWidth; note.classList.add("flash");
+  const bar = document.querySelector(".topbar, header"); const off = bar ? bar.offsetHeight + 90 : 160;
+  const y = note.getBoundingClientRect().top; if (y < off || y > innerHeight - 40) window.scrollTo({ top: scrollY + y - off - 60, behavior: "smooth" });
+}
 function submitMap() {
   const wrong = ARTIFACTS.filter(a => state.map[a.id] !== a.tactic);
   const note = $("#mapNote");
-  if (wrong.length) { note.className = "note bad"; note.textContent = `${wrong.length} of 8 mappings ${wrong.length === 1 ? "is" : "are"} off. Re-read the evidence on those cards — think about what the attacker is trying to achieve with each action, not just what tool it uses.`; return; }
+  if (wrong.length) { showFeedback(note, `${wrong.length} of 8 mappings ${wrong.length === 1 ? "is" : "are"} off. Re-read the evidence on those cards — think about what the attacker is trying to achieve with each action, not just what tool it uses.`); return; }
   state.mapOK = true; state.idx = 1; save(); render();
 }
 
@@ -318,10 +326,10 @@ function renderOrder(w) {
   const tb = el("div", "toolbar"); tb.innerHTML = `<span class="count">Order the 8 artifacts, first to last</span>`;
   const sub = el("button", "btn", "Check order"); sub.id = "submitOrder"; tb.appendChild(sub);
   board.appendChild(tb);
+  const ordNote = el("p", "note feedback", ""); ordNote.id = "orderNote"; ordNote.setAttribute("role", "alert"); board.appendChild(ordNote);
   const cards = el("div", "cards"); cards.id = "orderCards";
   drawOrder(cards);
   board.appendChild(cards);
-  board.appendChild(el("p", "note", "")).id = "orderNote";
   w.appendChild(board);
   sub.addEventListener("click", submitOrder);
 }
@@ -347,7 +355,7 @@ function submitOrder() {
   const correct = [...ARTIFACTS].sort((a, b) => a.order - b.order).map(a => a.id);
   const note = $("#orderNote");
   const wrongPositions = state.order.filter((id, i) => id !== correct[i]).length;
-  if (wrongPositions) { note.className = "note bad"; note.textContent = `Not quite — ${wrongPositions} artifact${wrongPositions === 1 ? " is" : "s are"} out of place. Start from how the attacker got in and follow the consequences through to the data leaving.`; return; }
+  if (wrongPositions) { showFeedback(note, `Not quite — ${wrongPositions} artifact${wrongPositions === 1 ? " is" : "s are"} out of place. Start from how the attacker got in and follow the consequences through to the data leaving.`); return; }
   state.orderOK = true; state.idx = 2; save(); render();
 }
 
@@ -436,4 +444,3 @@ if (state.started) { $("#resumeHint").hidden = false; $("#resetBtn").hidden = fa
 </script>
 </body>
 </html>
-
