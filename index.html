@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Anatomy of an Intrusion</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="RECON-01 — a hands-on DFIR lab: map host artifacts to attacker tactics, order the kill chain, and recover a flag.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a DFIR analyst's evidence board — a sticky case bar over a stack of
+   artifact cards. Each card gets a tactic dropdown (match the column); then the
+   cards are reordered into kill-chain sequence. */
+:root {
+  --bg: #eef1f5; --surface: #ffffff; --surface-2: #e6ebf2; --ink: #141a23; --muted: #566276;
+  --line: #d2d9e3; --accent: #0a7d55; --accent-soft: #d8f0e6; --accent-ink: #ffffff;
+  --good: #1d7a4b; --bad: #b42318; --warn: #9a6400;
+  --bar: #0f2019; --bar-ink: #e6f1ec; --bar-muted: #8aa89b;
+  --font-display: "Archivo", Arial, system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --radius: 6px; color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a1210; --surface: #111b17; --surface-2: #182520; --ink: #e2ede8; --muted: #8ba39a;
+    --line: #243530; --accent: #43c08c; --accent-soft: #0f2e22; --accent-ink: #05170f;
+    --good: #4cc38a; --bad: #f2777a; --warn: #e6b450;
+    --bar: #06100c; --bar-ink: #e2ede8; --bar-muted: #7d968c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0a1210; --surface: #111b17; --surface-2: #182520; --ink: #e2ede8; --muted: #8ba39a;
+  --line: #243530; --accent: #43c08c; --accent-soft: #0f2e22; --accent-ink: #05170f;
+  --good: #4cc38a; --bad: #f2777a; --warn: #e6b450;
+  --bar: #06100c; --bar-ink: #e2ede8; --bar-muted: #7d968c; color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font-body); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bar); }
+[hidden] { display: none !important; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.inner { max-width: 980px; margin: 0 auto; }
+.eyebrow { font: 600 11.5px/1.2 var(--font-body); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
+
+.topbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bar); color: var(--bar-ink); padding-block: 12px; }
+.topbar .inner { display: grid; grid-template-columns: auto 1fr auto; gap: 10px 24px; align-items: center; }
+.case-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.case-id .eyebrow { color: var(--bar-muted); } .case-id strong { font: 700 16px/1.2 var(--font-display); }
+.steps { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; min-width: 0; }
+.steps li { flex: 1; min-width: 0; font-size: 11.5px; line-height: 1.25; color: var(--bar-muted); padding-top: 7px;
+  border-top: 3px solid color-mix(in srgb, var(--bar-ink) 16%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.steps li.done { color: var(--bar-ink); border-top-color: color-mix(in srgb, var(--good) 60%, transparent); }
+.steps li.now { color: var(--bar-ink); font-weight: 600; border-top-color: var(--accent); }
+.progress { text-align: right; font: 500 13px/1.3 var(--font-mono); color: var(--bar-muted); } .progress b { color: var(--bar-ink); }
+
+main { padding-block: 24px 44px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.stage { display: grid; gap: 18px; }
+
+.sheet { max-width: 880px; margin: 0 auto; padding: 32px 34px; display: grid; gap: 20px; }
+.sheet h1 { font-size: clamp(32px, 6vw, 50px); font-weight: 800; line-height: 1; letter-spacing: -.015em; }
+.sheet .lede { font-size: 17px; max-width: 64ch; margin: 0; }
+.facts { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.facts div { background: var(--surface); padding: 12px 14px; display: grid; gap: 4px; } .facts b { font-size: 14px; font-weight: 600; }
+.rules { margin: 0; padding-left: 20px; display: grid; gap: 7px; max-width: 72ch; } .rules li::marker { color: var(--accent); }
+.sheet h2 { font-size: 20px; font-weight: 700; }
+
+.intro { padding: 22px 24px; display: grid; gap: 14px; }
+.msg { display: grid; grid-template-columns: 36px 1fr; gap: 12px; padding: 14px 16px; background: var(--surface-2); border-radius: var(--radius); }
+.avatar { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font: 600 13px/1 var(--font-body); }
+.msg .who { font-size: 13px; color: var(--muted); } .msg .who b { color: var(--ink); font-weight: 600; } .msg p { margin: 4px 0 0; }
+.intro h2 { font-size: clamp(21px,2.6vw,26px); font-weight: 700; } .intro p.lede { margin: 0; max-width: 66ch; }
+.steer { border-left: 3px solid var(--accent); padding: 2px 0 2px 14px; } .steer p { margin: 0; font-size: 13.5px; color: var(--muted); max-width: 66ch; } .steer b { color: var(--ink); }
+
+.board { padding: 18px 20px; display: grid; gap: 14px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.toolbar .count { font: 500 13px/1.3 var(--font-mono); color: var(--muted); } .toolbar .count b { color: var(--ink); }
+.cards { display: grid; gap: 10px; }
+.card { border: 1px solid var(--line); border-radius: var(--radius); padding: 13px 15px; display: grid; gap: 10px; background: var(--surface); }
+.card.ordered { grid-template-columns: auto 1fr; gap: 12px; align-items: start; }
+.ord-ctrl { display: grid; gap: 4px; }
+.ord-ctrl .pos { text-align: center; font: 700 15px/1 var(--font-mono); color: var(--accent); }
+.ord-btn { width: 30px; height: 26px; border: 1px solid var(--line); background: var(--surface); border-radius: 4px; cursor: pointer; font-size: 13px; color: var(--muted); }
+.ord-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--ink); } .ord-btn:disabled { opacity: .35; cursor: default; }
+.card-body { display: grid; gap: 10px; min-width: 0; }
+.card-top { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
+.art-id { font: 600 13px/1 var(--font-mono); } .art-src { font-size: 12px; color: var(--accent); font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+.art-ev { font: 13px/1.55 var(--font-mono); background: var(--surface-2); padding: 10px 12px; border-radius: var(--radius); overflow-wrap: anywhere; }
+.match-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.match-row label { font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+select { padding: 9px 10px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); font-size: 13.5px; min-width: 200px; flex: 1 1 200px; }
+select:focus { border-color: var(--accent); outline: none; } select.done { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+.tag { font: 600 11px/1 var(--font-mono); padding: 5px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.tag.ok { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); } .tag.no { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+
+.task { padding: 24px 26px; display: grid; gap: 16px; } .task h2 { font-size: clamp(21px,2.6vw,26px); font-weight: 700; }
+.field { display: grid; gap: 8px; } .field label { font-weight: 600; font-size: 14px; } .field .sub { font-size: 13px; color: var(--muted); margin: -4px 0 0; }
+.answer-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.answer-row input { flex: 1 1 240px; min-width: 0; padding: 11px 12px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); font-family: var(--font-mono); }
+.answer-row input:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.status { font-family: var(--font-mono); font-size: 13px; } .status.ok { color: var(--good); } .status.no { color: var(--bad); }
+details.tip { font-size: 13px; } details.tip summary { cursor: pointer; color: var(--accent); width: fit-content; } details.tip p { margin: 8px 0 0; color: var(--muted); max-width: 66ch; }
+
+.actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.btn { border: 1px solid transparent; border-radius: var(--radius); padding: 10px 16px; cursor: pointer; font-weight: 600; font-size: 14px; background: var(--accent); color: var(--accent-ink); }
+.btn:hover { filter: brightness(1.07); } .btn:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); } .btn.ghost:hover { border-color: var(--muted); filter: none; }
+.note { font-size: 13px; color: var(--muted); margin: 0; max-width: 72ch; } .note.bad { color: var(--bad); } .note.good { color: var(--good); }
+
+.flagbox { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 16px 18px; border: 2px dashed var(--accent); border-radius: var(--radius); background: var(--accent-soft); }
+.flagbox code { font: 500 clamp(15px,2.6vw,21px)/1.3 var(--font-mono); overflow-wrap: anywhere; min-width: 0; }
+.verdict { display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center; }
+.grade { font: 800 42px/1 var(--font-display); width: 82px; height: 82px; display: grid; place-items: center; border-radius: var(--radius); border: 2px solid currentColor; }
+.verdict h2 { margin-bottom: 4px; } .verdict p { margin: 0; color: var(--muted); max-width: 60ch; }
+.debrief { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.debrief li { display: grid; grid-template-columns: 2em 1fr; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.debrief .n { font: 700 14px/1.3 var(--font-mono); color: var(--accent); }
+.debrief .ev { font: 12.5px/1.5 var(--font-mono); } .debrief .tac { font-size: 13px; margin-top: 3px; } .debrief .tac b { font-weight: 600; }
+.restart-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+footer { padding-block: 0 32px; font-size: 12.5px; color: var(--muted); } footer .inner { border-top: 1px solid var(--line); padding-top: 14px; }
+
+@media (max-width: 720px) {
+  .topbar .inner { grid-template-columns: 1fr auto; } .steps { grid-column: 1 / -1; grid-row: 2; }
+  .steps li { font-size: 0; } .steps li.now { font-size: 11.5px; flex: 4; }
+  .sheet, .intro, .task, .board { padding: 20px 18px; } .facts { grid-template-columns: 1fr; }
+  select { min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="topbar gutter">
+  <div class="inner">
+    <div class="case-id"><span class="eyebrow">Driftwood DFIR · Host review</span><strong>DFIR-2026-0912-WKS</strong></div>
+    <ol class="steps" id="steps" aria-label="Step"></ol>
+    <div class="progress" id="progress"></div>
+  </div>
+</header>
+
+<main class="gutter">
+  <div class="inner">
+
+    <section class="panel sheet" id="briefing">
+      <div class="eyebrow">DFIR Reconstruction Lab · RECON-01</div>
+      <h1>Anatomy of an Intrusion</h1>
+      <p class="lede">A finance workstation, WKS-FIN-07, was compromised last week. Forensics pulled <b>8 artifacts</b> off it — a document, process events, registry keys, network beacons, a cleared log. Your job is to map each one to the attacker's tactic, then order them into the story of the attack.</p>
+      <div class="facts">
+        <div><span class="eyebrow">Your role</span><b>DFIR analyst</b></div>
+        <div><span class="eyebrow">Time needed</span><b>25–35 minutes</b></div>
+        <div><span class="eyebrow">You will</span><b>Map 8 artifacts · order the kill chain · recover facts</b></div>
+      </div>
+      <h2>How this lab works</h2>
+      <ol class="rules">
+        <li><b>Map the column:</b> for each artifact, choose the MITRE ATT&CK <b>tactic</b> it represents from the dropdown (Initial Access, Execution, Persistence, Credential Access, Discovery, Defense Evasion, Command & Control, Exfiltration).</li>
+        <li>One tactic in the list is a decoy — not every option is used, and no tactic repeats.</li>
+        <li>Get all 8 right to unlock the next step: <b>order the artifacts</b> into the sequence the attack actually unfolded.</li>
+        <li>Finally, recover three facts from the artifacts to build the <b>flag</b>. Submit it on your course platform.</li>
+        <li>Everything is checked in your browser; nothing is sent anywhere. Progress is saved on this device.</li>
+      </ol>
+      <div class="restart-row">
+        <button class="btn" id="startBtn" type="button">Open the case</button>
+        <button class="btn ghost" id="resetBtn" type="button" hidden>Start over</button>
+        <span class="note" id="resumeHint" hidden>Progress on this device was restored.</span>
+      </div>
+    </section>
+
+    <section id="stageWrap" hidden></section>
+    <section class="panel sheet" id="report" hidden></section>
+  </div>
+</main>
+
+<footer class="gutter"><div class="inner">Fictional training scenario. Hosts, domains and users are invented; all IP addresses and domains are for illustration only.</div></footer>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   SCENARIO — RECON-01. Facts checked by SHA-256 hash (never in source).
+   Each artifact: tactic = correct ATT&CK tactic key; order = kill-chain position.
+   ===================================================================== */
+const TACTICS = [
+  ["", "— choose tactic —"],
+  ["ia", "Initial Access"],
+  ["exec", "Execution"],
+  ["persist", "Persistence"],
+  ["privesc", "Privilege Escalation"],
+  ["defevade", "Defense Evasion"],
+  ["cred", "Credential Access"],
+  ["discover", "Discovery"],
+  ["c2", "Command & Control"],
+  ["exfil", "Exfiltration"]
+];
+const TLABEL = Object.fromEntries(TACTICS);
+/* "privesc" is the unused decoy option */
+
+const ARTIFACTS = [
+  { id: "ART-1", src: "Email / Document", tactic: "ia", order: 1,
+    ev: "Outlook recovered item: email 'Remittance advice' with attachment Remittance.docm; user opened it and clicked 'Enable Content' at 10:02." },
+  { id: "ART-2", src: "EDR process", tactic: "exec", order: 2,
+    ev: "Process tree 10:02:14 — WINWORD.EXE → powershell.exe -nop -w hidden -enc <base64 blob> (decoded: downloads and runs a second-stage payload)." },
+  { id: "ART-3", src: "Proxy / NetFlow", tactic: "c2", order: 3,
+    ev: "From 10:03 onward: HTTPS requests to analytics-cdn.net every 60s, ~1.5 KB each, jittered — classic beaconing to a command-and-control server." },
+  { id: "ART-4", src: "Registry (Autoruns)", tactic: "persist", order: 4,
+    ev: "New value under HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run named 'WinUpdater' = powershell -w hidden -c IEX(... analytics-cdn.net ...). Re-launches the implant at every logon." },
+  { id: "ART-5", src: "Command history", tactic: "discover", order: 5,
+    ev: "Executed in sequence: whoami /all; net group \"Domain Admins\" /domain; nltest /dclist — the attacker is enumerating accounts, privileges and domain controllers." },
+  { id: "ART-6", src: "EDR memory", tactic: "cred", order: 6,
+    ev: "rundll32.exe observed reading the memory of LSASS and writing lsass.dmp — credential-dumping behaviour to steal cached passwords and hashes." },
+  { id: "ART-7", src: "Event log", tactic: "defevade", order: 7,
+    ev: "At 10:41 the command 'wevtutil cl Security' cleared the Windows Security event log, and Defender real-time protection was disabled via registry — covering tracks." },
+  { id: "ART-8", src: "DLP / Proxy", tactic: "exfil", order: 8,
+    ev: "A 7-Zip archive of \\\\FS\\finance (640 MB, password-protected) was uploaded over HTTPS to analytics-cdn.net at 10:55." }
+];
+
+const FACTS = {
+  q_c2:      { hash: "356f412ac085947326ee1c260a64e0ea1132ba2022794c1403d27a236a21535b",
+               label: "What is the command-and-control (C2) domain?", sub: "The external domain used for beaconing, persistence and exfiltration.", ph: "domain",
+               tip: "The same domain appears in the beacon (ART-3), the Run key (ART-4) and the upload (ART-8)." },
+  q_persist: { hash: "e72f1de54de7ed0c3298d0bfc86dc1161bb9a5280da7552e8a9569caefcad224",
+               label: "What is the name of the autorun value used for persistence?", sub: "The value name under the registry Run key (one word).", ph: "value name",
+               tip: "In ART-4, the Run key value is named to look like a Windows updater. Enter just that name." },
+  q_cred:    { hash: "4cdbc4ad4b558745a694a0f3f0d55209314e1edfdbe96a3f14d266831728a941",
+               label: "Which process was dumped to steal credentials?", sub: "The Windows process whose memory was read (as named in the artifact).", ph: "process",
+               tip: "In ART-6, the memory of a specific security process was read and written to a .dmp file. Name that process (no extension)." }
+};
+/* flag = FLAG{<c2>_<persist>_<cred>} */
+/* ===================== END SCENARIO ===================== */
+
+
+const STEP_LABELS = ["Map the tactics", "Order the kill chain", "Recover the facts"];
+const KEY = "reconlab-recon01-v1";
+const $ = (s) => document.querySelector(s);
+const el = (t, c, h) => { const n = document.createElement(t); if (c) n.className = c; if (h != null) n.innerHTML = h; return n; };
+const esc = (s) => String(s).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
+
+let state = loadState();
+function fresh() { return { started: false, idx: 0, map: {}, mapOK: false, order: ARTIFACTS.map(a => a.id), orderOK: false, answers: {} }; }
+function loadState() { try { const r = localStorage.getItem(KEY); if (r) { const s = JSON.parse(r); if (s && typeof s.idx === "number") { if (!Array.isArray(s.order)) s.order = ARTIFACTS.map(a => a.id); return s; } } } catch (e) {} return fresh(); }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+async function sha256(s) { const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2,"0")).join(""); }
+const norm = (s) => String(s).trim().toLowerCase().replace(/\.(exe|dmp)$/,"").replace(/\s+/g,"");
+
+function renderBar() {
+  const se = $("#steps"); se.innerHTML = "";
+  STEP_LABELS.forEach((l, i) => se.appendChild(el("li", i < state.idx ? "done" : i === state.idx ? "now" : "", l)));
+  $("#progress").innerHTML = `Step <b>${Math.min(state.idx + 1, STEP_LABELS.length)}</b> / ${STEP_LABELS.length}`;
+}
+function render() {
+  renderBar();
+  if (state.idx >= STEP_LABELS.length) return renderReport();
+  const w = $("#stageWrap"); w.hidden = false; w.innerHTML = "";
+  if (state.idx === 0) renderMap(w); else if (state.idx === 1) renderOrder(w); else renderFacts(w);
+  w.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* ---- step 0: map tactics ---- */
+function renderMap(w) {
+  const intro = el("section", "panel intro");
+  intro.innerHTML = `<div class="msg"><div class="avatar">PN</div><div><div class="who"><b>Priya Nair</b> · DFIR lead</div><p>Here are the eight artifacts we recovered from WKS-FIN-07. Tell me what each one represents — tag it with the ATT&CK tactic. Read the evidence, not the source name; the source is just where we found it.</p></div></div>
+    <h2>Recovered artifacts</h2><p class="lede">Choose the tactic for each. One option in the list isn't used, and no tactic is used twice.</p>`;
+  w.appendChild(intro);
+
+  const board = el("section", "panel board");
+  const tb = el("div", "toolbar"); tb.innerHTML = `<span class="count" id="mapCount"></span>`;
+  const sub = el("button", "btn", "Check mapping"); sub.id = "submitMap"; tb.appendChild(sub);
+  board.appendChild(tb);
+  const cards = el("div", "cards");
+  ARTIFACTS.forEach(a => {
+    const card = el("div", "card"); card.id = "card-" + a.id;
+    card.innerHTML = `<div class="card-top"><span class="art-id">${a.id}</span><span class="art-src">${esc(a.src)}</span></div><div class="art-ev">${esc(a.ev)}</div>`;
+    const row = el("div", "match-row");
+    row.appendChild(el("label", null, "Tactic"));
+    const sel = document.createElement("select");
+    TACTICS.forEach(([v, lab]) => { const o = document.createElement("option"); o.value = v; o.textContent = lab; if (v === state.map[a.id]) o.selected = true; sel.appendChild(o); });
+    if (state.map[a.id]) sel.classList.add("done");
+    sel.addEventListener("change", () => { state.map[a.id] = sel.value; sel.classList.toggle("done", !!sel.value); save(); updateMapCount(); });
+    row.appendChild(sel);
+    card.appendChild(row);
+    cards.appendChild(card);
+  });
+  board.appendChild(cards);
+  board.appendChild(el("p", "note", "")).id = "mapNote";
+  w.appendChild(board);
+  updateMapCount();
+  sub.addEventListener("click", submitMap);
+}
+function updateMapCount() {
+  const done = ARTIFACTS.filter(a => state.map[a.id]).length;
+  const c = $("#mapCount"); if (c) c.innerHTML = `<b>${done}</b> / ${ARTIFACTS.length} mapped`;
+  const b = $("#submitMap"); if (b) b.disabled = done < ARTIFACTS.length;
+}
+function submitMap() {
+  const wrong = ARTIFACTS.filter(a => state.map[a.id] !== a.tactic);
+  const note = $("#mapNote");
+  if (wrong.length) { note.className = "note bad"; note.textContent = `${wrong.length} of 8 mappings ${wrong.length === 1 ? "is" : "are"} off. Re-read the evidence on those cards — think about what the attacker is trying to achieve with each action, not just what tool it uses.`; return; }
+  state.mapOK = true; state.idx = 1; save(); render();
+}
+
+/* ---- step 1: order ---- */
+function renderOrder(w) {
+  const intro = el("section", "panel intro");
+  intro.innerHTML = `<div class="msg"><div class="avatar">PN</div><div><div class="who"><b>Priya Nair</b> · DFIR lead</div><p>Tactics are right. Now put the artifacts in the order the attack actually happened — from how they got in, to what they did last. Use the arrows.</p></div></div>
+    <div class="steer"><p>Think about the logical flow of an intrusion: you can't persist or steal data before you've run code, and covering tracks comes near the end. The timestamps in the evidence help.</p></div>`;
+  w.appendChild(intro);
+
+  const board = el("section", "panel board");
+  const tb = el("div", "toolbar"); tb.innerHTML = `<span class="count">Order the 8 artifacts, first to last</span>`;
+  const sub = el("button", "btn", "Check order"); sub.id = "submitOrder"; tb.appendChild(sub);
+  board.appendChild(tb);
+  const cards = el("div", "cards"); cards.id = "orderCards";
+  drawOrder(cards);
+  board.appendChild(cards);
+  board.appendChild(el("p", "note", "")).id = "orderNote";
+  w.appendChild(board);
+  sub.addEventListener("click", submitOrder);
+}
+function drawOrder(cards) {
+  cards.innerHTML = "";
+  state.order.forEach((id, i) => {
+    const a = ARTIFACTS.find(x => x.id === id);
+    const card = el("div", "card ordered");
+    const ctrl = el("div", "ord-ctrl");
+    const up = el("button", "ord-btn", "▲"); up.disabled = i === 0; up.title = "Move up";
+    const pos = el("div", "pos", String(i + 1));
+    const down = el("button", "ord-btn", "▼"); down.disabled = i === state.order.length - 1; down.title = "Move down";
+    up.addEventListener("click", () => { [state.order[i-1], state.order[i]] = [state.order[i], state.order[i-1]]; save(); drawOrder(cards); });
+    down.addEventListener("click", () => { [state.order[i+1], state.order[i]] = [state.order[i], state.order[i+1]]; save(); drawOrder(cards); });
+    ctrl.appendChild(up); ctrl.appendChild(pos); ctrl.appendChild(down);
+    const body = el("div", "card-body");
+    body.innerHTML = `<div class="card-top"><span class="art-id">${a.id}</span><span class="art-src">${esc(a.src)}</span><span class="tag">${esc(TLABEL[a.tactic])}</span></div><div class="art-ev">${esc(a.ev)}</div>`;
+    card.appendChild(ctrl); card.appendChild(body);
+    cards.appendChild(card);
+  });
+}
+function submitOrder() {
+  const correct = [...ARTIFACTS].sort((a, b) => a.order - b.order).map(a => a.id);
+  const note = $("#orderNote");
+  const wrongPositions = state.order.filter((id, i) => id !== correct[i]).length;
+  if (wrongPositions) { note.className = "note bad"; note.textContent = `Not quite — ${wrongPositions} artifact${wrongPositions === 1 ? " is" : "s are"} out of place. Start from how the attacker got in and follow the consequences through to the data leaving.`; return; }
+  state.orderOK = true; state.idx = 2; save(); render();
+}
+
+/* ---- step 2: facts ---- */
+function renderFacts(w) {
+  const sec = el("section", "panel task");
+  sec.innerHTML = `<h2>Recover the facts</h2>
+    <div class="msg"><div class="avatar">PN</div><div><div class="who"><b>Priya Nair</b> · DFIR lead</div><p>The story holds together. Last thing — pull these three indicators out of the artifacts for the report and the block-list.</p></div></div>`;
+  const form = el("form", "stage");
+  const solved = Object.keys(FACTS).every(k => state.answers[k]);
+  Object.entries(FACTS).forEach(([k, f]) => {
+    const prev = state.answers[k];
+    const fld = el("div", "field");
+    fld.appendChild(el("label", null, esc(f.label)));
+    if (f.sub) fld.appendChild(el("p", "sub", esc(f.sub)));
+    const row = el("div", "answer-row");
+    const input = document.createElement("input"); input.type = "text"; input.placeholder = f.ph; input.spellcheck = false; input.autocomplete = "off";
+    if (prev) { input.value = prev; input.disabled = true; }
+    const st = el("span", "status" + (prev ? " ok" : ""), prev ? "✓" : "");
+    row.appendChild(input); row.appendChild(st); fld.appendChild(row);
+    if (f.tip) { const d = el("details", "tip"); d.innerHTML = `<summary>Stuck? Show a nudge</summary><p>${esc(f.tip)}</p>`; fld.appendChild(d); }
+    f._i = input; f._s = st;
+    form.appendChild(fld);
+  });
+  if (!solved) { const row = el("div", "actions"); const b = el("button", "btn", "Check answers"); b.type = "submit"; row.appendChild(b); form.appendChild(row); }
+  form.addEventListener("submit", (e) => { e.preventDefault(); checkFacts(); });
+  sec.appendChild(form);
+  if (solved) { const row = el("div", "actions"); const b = el("button", "btn", "Close the case →"); b.addEventListener("click", () => { state.idx = 3; save(); render(); }); row.appendChild(b); sec.appendChild(row); }
+  w.appendChild(sec);
+}
+async function checkFacts() {
+  for (const [k, f] of Object.entries(FACTS)) {
+    if (state.answers[k]) continue;
+    const v = norm(f._i.value); if (!v) { f._s.textContent = "—"; f._s.className = "status"; continue; }
+    if (await sha256(v) === f.hash) { state.answers[k] = v; f._i.disabled = true; f._s.textContent = "✓ correct"; f._s.className = "status ok"; }
+    else { f._s.textContent = "✗ not it"; f._s.className = "status no"; }
+  }
+  save();
+  if (Object.keys(FACTS).every(k => state.answers[k])) render();
+}
+
+/* ---- report ---- */
+function renderReport() {
+  $("#stageWrap").hidden = true;
+  const r = $("#report"); r.hidden = false; r.innerHTML = "";
+  const flag = (state.answers.q_c2 && state.answers.q_persist && state.answers.q_cred) ? `FLAG{${state.answers.q_c2}_${state.answers.q_persist}_${state.answers.q_cred}}` : null;
+  r.appendChild(el("div", "eyebrow", "Reconstruction report · DFIR-2026-0912-WKS"));
+  const vr = el("div", "verdict");
+  vr.innerHTML = `<div class="grade" style="color:var(--good)">A</div><div><h2>Intrusion reconstructed</h2><p>You mapped all eight artifacts to the right tactics, ordered the kill chain correctly, and pulled the key indicators. That's a complete, defensible reconstruction.</p></div>`;
+  r.appendChild(vr);
+
+  if (flag) {
+    r.appendChild(el("h2", null, "Your flag"));
+    const fb = el("div", "flagbox"); fb.innerHTML = `<code id="flagText">${esc(flag)}</code>`;
+    const copy = el("button", "btn ghost", "Copy");
+    copy.addEventListener("click", async () => { try { await navigator.clipboard.writeText(flag); copy.textContent = "Copied"; setTimeout(() => copy.textContent = "Copy", 1500); } catch (e) { const rg = document.createRange(); rg.selectNode($("#flagText")); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(rg); } });
+    fb.appendChild(copy); r.appendChild(fb);
+    r.appendChild(el("p", "note", "Built from the three indicators you recovered. Submit it on your course platform."));
+  }
+
+  r.appendChild(el("h2", null, "The attack, start to finish"));
+  const list = el("ol", "debrief");
+  [...ARTIFACTS].sort((a, b) => a.order - b.order).forEach((a, i) => {
+    const li = el("li");
+    li.appendChild(el("span", "n", String(i + 1)));
+    const d = el("div");
+    d.innerHTML = `<div class="tac"><b>${esc(TLABEL[a.tactic])}</b> · ${a.id} (${esc(a.src)})</div><div class="ev">${esc(a.ev)}</div>`;
+    li.appendChild(d); list.appendChild(li);
+  });
+  r.appendChild(list);
+
+  const row = el("div", "restart-row");
+  const again = el("button", "btn ghost", "Review this case"); again.addEventListener("click", () => { state.idx = 2; save(); $("#report").hidden = true; render(); window.scrollTo({ top: 0, behavior: "smooth" }); });
+  const reset = el("button", "btn", "Start a fresh case"); reset.addEventListener("click", resetAll);
+  row.appendChild(again); row.appendChild(reset); r.appendChild(row);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function resetAll() { state = fresh(); save(); $("#report").hidden = true; $("#stageWrap").hidden = true; $("#briefing").hidden = false; $("#resetBtn").hidden = true; $("#resumeHint").hidden = true; renderBar(); window.scrollTo({ top: 0, behavior: "smooth" }); }
+function begin() { state.started = true; save(); $("#briefing").hidden = true; $("#report").hidden = true; render(); }
+$("#startBtn").addEventListener("click", begin);
+$("#resetBtn").addEventListener("click", resetAll);
+
+renderBar();
+if (state.started) { $("#resumeHint").hidden = false; $("#resetBtn").hidden = false; $("#briefing").hidden = true; render(); }
+</script>
+</body>
+</html>
